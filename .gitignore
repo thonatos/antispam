@@ -4,6 +4,7 @@ dist
 
 # file
 .env
+yarn.lock
 package-lock.json
 
 # data

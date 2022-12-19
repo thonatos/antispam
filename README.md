@@ -4,9 +4,9 @@
 
 ## Usage
 
-### Auth
+### Auth Telegram
 
-login in with your account by run command:
+login in with your account:
 
 ```bash
 $ yarn cmd:login
@@ -14,7 +14,7 @@ $ yarn cmd:login
 
 then save the sesstion string to `.env` file.
 
-### Config
+### Config Antispam
 
 you can customize QA with `.env` file.
 
@@ -36,5 +36,7 @@ SESSION_STRING = ""
 ### Run Antispam
 
 ```bash
+$ yarn
+$ yarn build
 $ DEBUG=* yarn start // DEBUG=* yarn cmd:run
 ```
