@@ -5,3 +5,6 @@ dist
 # file
 .env
 package-lock.json
+
+# data
+whitelist.json

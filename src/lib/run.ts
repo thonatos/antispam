@@ -1,6 +1,6 @@
+import fs from 'fs';
 import debug from 'debug';
-import LRU from 'lru-cache';
-import { Api, TelegramClient } from 'telegram';
+import { Api, TelegramClient, utils } from 'telegram';
 import { StringSession } from 'telegram/sessions';
 import { NewMessage, NewMessageEvent } from 'telegram/events';
 import { LogLevel } from 'telegram/extensions/Logger';
@@ -8,8 +8,7 @@ import { telegram_service_ids } from '../constants';
 import { config } from '../config';
 
 const logger = debug('app:telegram');
-
-const cache = new LRU({ max: 1000 });
+const whitelist = new Set();
 
 export const run = async () => {
   const { api_id, api_hash, antispam, proxy, session_string } = config;
@@ -30,6 +29,28 @@ export const run = async () => {
   const meIdStr = me.id.toString();
   logger('run:me', meIdStr);
 
+  async function readWhiteList() {
+    try {
+      const cachedKeys = JSON.parse(
+        fs.readFileSync('whitelist.json').toString()
+      );
+      logger('readWhiteList:cachedKeys', cachedKeys.length);
+      cachedKeys.map((key: string) => whitelist.add(key));
+    } catch (error) {
+      logger('readWhiteList:error', error);
+    }
+  }
+
+  async function saveWhitelist() {
+    try {
+      const cachedKeys = Array.from(whitelist);
+      logger('saveWhitelist:cachedKeys', cachedKeys.length);
+      fs.writeFileSync('whitelist.json', JSON.stringify(cachedKeys, null, 2));
+    } catch (error) {
+      logger('saveWhitelist:error', error);
+    }
+  }
+
   async function showWelcome() {
     const welcome = `You should now be connected. - ${new Date().toLocaleDateString()}`;
     // logger('showWelcome:welcome', welcome);
@@ -45,28 +66,30 @@ export const run = async () => {
     }, 5 * 1000);
   }
 
+  async function clearDialogs(id: string) {
+    const userId = utils.parseID(id);
+
+    if (!userId) {
+      return;
+    }
+
+    const result = await client.invoke(
+      new Api.messages.DeleteHistory({
+        justClear: true,
+        revoke: true,
+        peer: new Api.PeerUser({
+          userId,
+        }),
+      })
+    );
+    logger('clearDialogs:result', result);
+  }
+
   async function checkDialogs() {
     const dialogs = await client.getDialogs();
 
     dialogs.map(async (dialog) => {
       const { id, name, title, isUser, isChannel, isGroup, archived } = dialog;
-
-      if (isUser) {
-        const idStr = id?.toString();
-
-        if (!archived) {
-          cache.set(id?.toString(), true);
-        } else {
-          logger('checkDialogs:isUser:dialog', {
-            name,
-            title,
-            archived,
-            id,
-            idStr,
-          });
-        }
-        return;
-      }
 
       if (isChannel) {
         // logger('checkDialogs:channel', title);
@@ -77,6 +100,35 @@ export const run = async () => {
         // logger('checkDialogs:group', title);
         return;
       }
+
+      if (isUser) {
+        const idStr = id?.toString();
+
+        if (!idStr) {
+          return;
+        }
+
+        if (!archived) {
+          whitelist.add(idStr);
+          return;
+        }
+
+        if (whitelist.has(idStr)) {
+          return;
+        }
+
+        logger('checkDialogs:isUser:dialog', {
+          name,
+          title,
+          archived,
+          id,
+          idStr,
+        });
+
+        await clearDialogs(idStr);
+      }
+
+      saveWhitelist();
     });
   }
 
@@ -103,14 +155,14 @@ export const run = async () => {
       isChannel ||
       !isPrivate ||
       telegram_service_ids.includes(chatIdStr) ||
-      cache.has(chatIdStr)
+      whitelist.has(chatIdStr)
     ) {
       return;
     }
 
     if (out) {
       if (messageContent.includes(antispam.question)) {
-        cache.set(chatIdStr, true);
+        whitelist.add(chatIdStr);
       }
       return;
     }
@@ -128,24 +180,26 @@ export const run = async () => {
 
     if (messageContent.includes(antispam.answer)) {
       logger('messageHandler:god answer');
-
-      cache.set(chatIdStr, true);
+      whitelist.add(chatIdStr);
       client.sendMessage(chatId, {
         message: 'You have passed the verification. Thanks.',
       });
+
+      saveWhitelist();
     } else {
       logger('messageHandler:bad answer');
-
       await message.reply({
         message: antispam.question,
       });
 
+      // await message.markAsRead();
       await message.delete({
         revoke: true,
       });
     }
   }
 
+  await readWhiteList();
   await showWelcome();
   await checkDialogs();
 
