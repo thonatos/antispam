@@ -5,7 +5,9 @@ dist
 # file
 .env
 yarn.lock
+yarn-error.log
 package-lock.json
 
 # data
+data
 whitelist.json
