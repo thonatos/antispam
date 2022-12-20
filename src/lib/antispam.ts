@@ -137,15 +137,33 @@ export default class Antispam {
           return;
         }
 
+        // deleted account
+        if (!name && !title) {
+          debug('checkDialogs:isUser:dialog', 'deleted account', {
+            name,
+            title,
+            archived,
+            id,
+            idStr,
+          });
+
+          this.whitelist.delete(idStr);
+          await this.clearDialogs(idStr);
+          return;
+        }
+
+        // normal dialog
         if (!archived) {
           this.whitelist.add(idStr);
           return;
         }
 
+        // existing dialog
         if (this.whitelist.has(idStr)) {
           return;
         }
 
+        // archived dialog
         debug('checkDialogs:isUser:dialog', {
           name,
           title,
