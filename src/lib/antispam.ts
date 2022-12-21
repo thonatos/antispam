@@ -1,5 +1,6 @@
 import fs from 'fs-extra';
 import path from 'path';
+import dayjs from 'dayjs';
 import Debug from 'debug';
 import { CronJob } from 'cron';
 
@@ -10,25 +11,27 @@ import { StringSession } from 'telegram/sessions';
 import { NewMessage, NewMessageEvent } from 'telegram/events';
 import { LogLevel } from 'telegram/extensions/Logger';
 
-import { telegram_service_ids } from '../constants';
+import { DEFAULT_DATA, TELEGRAM_SERVICE_IDS } from '../constants';
 import { config } from '../config';
 
 const debug = Debug('app:antispam');
 
 export default class Antispam {
   config: Config;
-  whitelist: Set<string>;
   baseDir: string;
   dataFile: string;
-
-  client: TelegramClient;
+  whitelist: Set<string>;
+  serviceList: Set<string>;
 
   meIdStr: string;
+  client: TelegramClient;
 
   constructor() {
     this.config = config;
-    this.whitelist = new Set();
     this.baseDir = process.cwd();
+    this.whitelist = new Set();
+    this.serviceList = new Set(TELEGRAM_SERVICE_IDS);
+
     this.meIdStr = '';
 
     // init telegram client
@@ -42,32 +45,32 @@ export default class Antispam {
     });
     this.client.setLogLevel(LogLevel.INFO);
 
-    // init data file
+    // init data
     this.dataFile = path.join(
       this.baseDir,
       this.config.data_file || 'data.json'
     );
+    this._initData();
+  }
 
-    if (!fs.existsSync(this.dataFile)) {
-      fs.ensureFileSync(this.dataFile);
-      fs.writeFileSync(this.dataFile, '[]');
+  private _initData() {
+    if (fs.existsSync(this.dataFile)) {
+      return;
     }
+
+    fs.ensureFileSync(this.dataFile);
+    fs.writeFileSync(this.dataFile, JSON.stringify(DEFAULT_DATA, null, 2));
   }
 
-  async init() {
-    const welcome = `You should now be connected - ${new Date().toLocaleDateString()}`;
-    // debug('init:welcome', welcome);
-
-    const me = (await this.client.getMe()) as unknown as Api.User;
-    const meIdStr = me.id.toString();
-
-    this.meIdStr = meIdStr;
-    debug('init:meIdStr', meIdStr);
-
+  async notify(msg: string, clear?: boolean) {
     const message = await this.client.sendMessage('me', {
-      message: welcome,
+      message: msg,
+      silent: true,
     });
-    // debug('init:message', message);
+
+    if (!clear) {
+      return;
+    }
 
     setTimeout(() => {
       message.delete({
@@ -76,29 +79,23 @@ export default class Antispam {
     }, 5 * 1000);
   }
 
-  async notify() {
-    const notification = `Antispam is running - ${new Date().toLocaleDateString()}`;
-
-    const message = await this.client.sendMessage('me', {
-      message: notification,
-    });
-
-    setTimeout(() => {
-      message.delete({
-        revoke: true,
-      });
-    }, 5 * 1000);
-  }
-
-  async read() {
+  async load() {
     const dataFile = this.dataFile;
     try {
-      const cachedKeys = JSON.parse(fs.readFileSync(dataFile, 'utf-8'));
-      debug('read:cachedKeys', cachedKeys.length);
+      const data = JSON.parse(fs.readFileSync(dataFile, 'utf-8'));
 
-      cachedKeys.map((key: string) => this.whitelist.add(key));
+      const whiteList = data.whiteList || [];
+      debug('load:whitelist', whiteList.length);
+
+      this.whitelist.clear();
+      whiteList.map((key: string) => this.whitelist.add(key));
+
+      const serviceList = data.serviceList || [];
+      debug('load:serviceList', serviceList.length);
+
+      serviceList.map((key: string) => this.serviceList.add(key));
     } catch (error) {
-      debug('read:error', error);
+      debug('load:error', error);
     }
   }
 
@@ -108,7 +105,16 @@ export default class Antispam {
       const cachedKeys = Array.from(this.whitelist);
       debug('save:cachedKeys', cachedKeys.length);
 
-      fs.writeFileSync(dataFile, JSON.stringify(cachedKeys, null, 2));
+      fs.writeFileSync(
+        dataFile,
+        JSON.stringify(
+          {
+            whitelist: cachedKeys,
+          },
+          null,
+          2
+        )
+      );
     } catch (error) {
       debug('save:error', error);
     }
@@ -193,7 +199,13 @@ export default class Antispam {
         }),
       })
     );
-    debug('clearDialogs:result', result.ptsCount);
+
+    const { ptsCount } = result;
+    debug('clearDialogs:result', ptsCount);
+
+    await this.notify(
+      `AntiSpam: clear dialog from ${id} with ${ptsCount} messages`
+    );
   }
 
   async messageHandler(event: NewMessageEvent) {
@@ -221,7 +233,7 @@ export default class Antispam {
       isGroup ||
       isChannel ||
       !isPrivate ||
-      telegram_service_ids.includes(chatIdStr) ||
+      this.serviceList.has(chatIdStr) ||
       this.whitelist.has(chatIdStr)
     ) {
       return;
@@ -255,15 +267,54 @@ export default class Antispam {
       this.save();
     } else {
       debug('messageHandler:bad answer');
+
+      await message.markAsRead();
+
       await message.reply({
         message: antispam.question,
       });
 
-      // await message.markAsRead();
-      await message.delete({
-        revoke: true,
-      });
+      // await message.delete({
+      //   revoke: true,
+      // });
     }
+  }
+
+  async init() {
+    const me = (await this.client.getMe()) as unknown as Api.User;
+
+    const meIdStr = me.id.toString();
+    debug('init:meIdStr', meIdStr);
+
+    this.meIdStr = meIdStr;
+
+    const currentDateTime = dayjs().format('YYYY-MM-DD HH:mm:ss');
+    const welcome = `AntiSpam is running - ${currentDateTime}`;
+    // debug('init:welcome', welcome);
+
+    await this.notify(welcome);
+  }
+
+  async schedule() {
+    const cronTime = this.config.antispam.cron_time;
+    debug('schedule:cronTime', cronTime);
+
+    const schedule = new CronJob(
+      cronTime,
+      async () => {
+        const currentDateTime = dayjs().format('YYYY-MM-DD HH:mm:ss');
+        const msg = `AntiSpam: clean spam - ${currentDateTime}`;
+        debug('schedule:msg', msg);
+
+        await this.clean();
+        await this.save();
+      },
+      null,
+      true,
+      'Asia/Shanghai'
+    );
+
+    schedule.start();
   }
 
   async login() {
@@ -284,7 +335,7 @@ export default class Antispam {
   async run() {
     await this.client.connect();
 
-    await this.read();
+    await this.load();
     await this.init();
 
     // events
@@ -294,20 +345,7 @@ export default class Antispam {
     );
 
     // schedule
-    const schedule = new CronJob(
-      '*/5 * * * *',
-      async () => {
-        debug('schedule: running a task every 5 minute');
-        await this.notify();
-        await this.clean();
-        await this.save();
-      },
-      null,
-      true,
-      'Asia/Shanghai'
-    );
-
-    schedule.start();
+    this.schedule();
   }
 }
 
@@ -325,9 +363,9 @@ export interface Config {
   antispam: {
     question: string;
     answer: string;
+    cron_time: string;
   };
 
   session_string: string;
-
   data_file?: string;
 }

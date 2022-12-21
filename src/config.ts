@@ -39,6 +39,8 @@ export const config: Config = {
   antispam: {
     question: process.env.ANTISPAM_QUESTION || '1024-24=?',
     answer: process.env.ANTISPAM_ANSWER || '1000',
+
+    cron_time: process.env.ANTISPAM_CRON_TIME || '*/5 * * * *',
   },
 
   session_string: process.env.SESSION_STRING || '',
