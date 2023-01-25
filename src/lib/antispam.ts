@@ -208,7 +208,7 @@ export default class Antispam {
     );
   }
 
-  async messageHandler(event: NewMessageEvent) {
+  messageHandler = async (event: NewMessageEvent) => {
     const { meIdStr } = this;
     const { antispam } = this.config;
     const { message } = event;
@@ -278,7 +278,7 @@ export default class Antispam {
       //   revoke: true,
       // });
     }
-  }
+  };
 
   async init() {
     const me = (await this.client.getMe()) as unknown as Api.User;
@@ -339,10 +339,7 @@ export default class Antispam {
     await this.init();
 
     // events
-    this.client.addEventHandler(
-      this.messageHandler.bind(this),
-      new NewMessage()
-    );
+    this.client.addEventHandler(this.messageHandler, new NewMessage());
 
     // schedule
     this.schedule();
